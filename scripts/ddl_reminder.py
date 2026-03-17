@@ -56,16 +56,166 @@ def get_bitable_records(token):
     return all_records
 
 
-def find_person_field_key(fields):
+def find_person_field(fields):
+    """Find the person field key and value by checking all field keys."""
     for key in fields:
-        if "落实人" in key or "Person" in key:
-            return key
-    return None
+        key_lower = key.lower().replace(" ", "")
+        if "\u843d\u5b9e\u4eba" in key or "person" in key_lower or "Person" in key:
+            val = fields[key]
+            if isinstance(val, list) and len(val) > 0:
+                return val
+            elif isinstance(val, list):
+                return val
+    return []
 
 
 def filter_pending_tasks(records):
     today = datetime.now(BJT).date()
     pending = []
+
+    # Print field keys from first record for debugging
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"DEBUG - Field keys in first record: {list(first_fields.keys())}")
+
+    for record in records:
+        fields = record.get("fields", {})
+
+        # Check completion status
+        is_done = fields.get("\u5b8c\u6210\u60c5\u51b5", False)
+        if is_done:
+            continue
+
+        # Get DDL
+        ddl_value = fields.get("DDL")
+        if ddl_value is None:
+            continue
+
+        if isinstance(ddl_value, (int, float)):
+            ddl_date = datetime.fromtimestamp(ddl_value / 1000, tz=BJT).date()
+        else:
+            try:
+                ddl_date = datetime.strptime(str(ddl_value).replace("/", "-"), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+
+        if ddl_date <= today:
+            task_name = fields.get("\u4efb\u52a1", "\u672a\u547d\u540d\u4efb\u52a1")
+
+            persons_raw = find_person_field(fields)
+
+            notes = fields.get("\u5907\u6ce8", "")
+
+            person_list = []
+            if isinstance(persons_raw, list):
+                for p in persons_raw:
+                    if isinstance(p, dict):
+                        person_list.append({
+                            "id": p.get("id", ""),
+                            "name": p.get("name", "\u672a\u77e5"),
+                        })
+
+            days_overdue = (today - ddl_date).days
+
+            pending.append({
+                "task": task_name,
+                "persons": person_list,
+                "ddl": str(ddl_date),
+                "days_overdue": days_overdue,
+                "notes": notes,
+            })
+
+    return pending
+
+
+def build_message_content(pending_tasks):
+    if not pending_tasks:
+        return None
+
+    person_tasks = {}
+    for task in pending_tasks:
+        for person in task["persons"]:
+            pid = person["id"]
+            if pid not in person_tasks:
+                person_tasks[pid] = {
+                    "name": person["name"],
+                    "id": pid,
+                    "tasks": [],
+import sys
+import json
+import requests
+from datetime import datetime, timezone, timedelta
+
+# ==================== Configuration ====================
+LARK_APP_ID = os.environ["LARK_APP_ID"]
+LARK_APP_SECRET = os.environ["LARK_APP_SECRET"]
+LARK_CHAT_ID = os.environ["LARK_CHAT_ID"]
+LARK_BASE_APP_TOKEN = os.environ["LARK_BASE_APP_TOKEN"]
+LARK_TABLE_ID = os.environ["LARK_TABLE_ID"]
+
+# Lark Suite API base URL
+BASE_URL = "https://open.larksuite.com/open-apis"
+
+# Beijing Time
+BJT = timezone(timedelta(hours=8))
+
+
+def get_tenant_access_token():
+    url = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
+    payload = {
+        "app_id": LARK_APP_ID,
+        "app_secret": LARK_APP_SECRET,
+    }
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("code") != 0:
+        raise Exception(f"Failed to get token: {data}")
+    return data["tenant_access_token"]
+
+
+def get_bitable_records(token):
+    url = f"{BASE_URL}/bitable/v1/apps/{LARK_BASE_APP_TOKEN}/tables/{LARK_TABLE_ID}/records"
+    headers = {"Authorization": f"Bearer {token}"}
+    all_records = []
+    page_token = None
+
+    while True:
+        params = {"page_size": 100}
+        if page_token:
+            params["page_token"] = page_token
+        resp = requests.get(url, headers=headers, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") != 0:
+            raise Exception(f"Failed to get records: {data}")
+        items = data.get("data", {}).get("items", [])
+        all_records.extend(items)
+        if not data["data"].get("has_more"):
+            break
+        page_token = data["data"].get("page_token")
+
+    return all_records
+
+
+def find_person_field(fields):
+    """Find the person field value by scanning all field keys for person-related names."""
+    for key in fields:
+        if "落实人" in key or "Person" in key or "person" in key:
+            val = fields[key]
+            if isinstance(val, list):
+                return val
+    return []
+
+
+def filter_pending_tasks(records):
+    today = datetime.now(BJT).date()
+    pending = []
+
+    # Print field keys from first record for debugging
+    if records:
+        first_fields = records[0].get("fields", {})
+        print(f"DEBUG - Field keys in first record: {list(first_fields.keys())}")
 
     for record in records:
         fields = record.get("fields", {})
@@ -91,14 +241,13 @@ def filter_pending_tasks(records):
         if ddl_date <= today:
             task_name = fields.get("任务", "未命名任务")
 
-            person_key = find_person_field_key(fields)
-            persons = fields.get(person_key, []) if person_key else []
+            persons_raw = find_person_field(fields)
 
             notes = fields.get("备注", "")
 
             person_list = []
-            if isinstance(persons, list):
-                for p in persons:
+            if isinstance(persons_raw, list):
+                for p in persons_raw:
                     if isinstance(p, dict):
                         person_list.append({
                             "id": p.get("id", ""),
