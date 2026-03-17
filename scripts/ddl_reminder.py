@@ -37,9 +37,8 @@ def get_bitable_records(token):
     headers = {"Authorization": f"Bearer {token}"}
     all_records = []
     page_token = None
-
     while True:
-        params = {"page_size": 100}
+        params = {"page_size": 100, "user_id_type": "open_id"}
         if page_token:
             params["page_token"] = page_token
         resp = requests.get(url, headers=headers, params=params)
@@ -52,149 +51,6 @@ def get_bitable_records(token):
         if not data["data"].get("has_more"):
             break
         page_token = data["data"].get("page_token")
-
-    return all_records
-
-
-def find_person_field(fields):
-    """Find the person field key and value by checking all field keys."""
-    for key in fields:
-        key_lower = key.lower().replace(" ", "")
-        if "\u843d\u5b9e\u4eba" in key or "person" in key_lower or "Person" in key:
-            val = fields[key]
-            if isinstance(val, list) and len(val) > 0:
-                return val
-            elif isinstance(val, list):
-                return val
-    return []
-
-
-def filter_pending_tasks(records):
-    today = datetime.now(BJT).date()
-    pending = []
-
-    # Print field keys from first record for debugging
-    if records:
-        first_fields = records[0].get("fields", {})
-        print(f"DEBUG - Field keys in first record: {list(first_fields.keys())}")
-
-    for record in records:
-        fields = record.get("fields", {})
-
-        # Check completion status
-        is_done = fields.get("\u5b8c\u6210\u60c5\u51b5", False)
-        if is_done:
-            continue
-
-        # Get DDL
-        ddl_value = fields.get("DDL")
-        if ddl_value is None:
-            continue
-
-        if isinstance(ddl_value, (int, float)):
-            ddl_date = datetime.fromtimestamp(ddl_value / 1000, tz=BJT).date()
-        else:
-            try:
-                ddl_date = datetime.strptime(str(ddl_value).replace("/", "-"), "%Y-%m-%d").date()
-            except ValueError:
-                continue
-
-        if ddl_date <= today:
-            task_name = fields.get("\u4efb\u52a1", "\u672a\u547d\u540d\u4efb\u52a1")
-
-            persons_raw = find_person_field(fields)
-
-            notes = fields.get("\u5907\u6ce8", "")
-
-            person_list = []
-            if isinstance(persons_raw, list):
-                for p in persons_raw:
-                    if isinstance(p, dict):
-                        person_list.append({
-                            "id": p.get("id", ""),
-                            "name": p.get("name", "\u672a\u77e5"),
-                        })
-
-            days_overdue = (today - ddl_date).days
-
-            pending.append({
-                "task": task_name,
-                "persons": person_list,
-                "ddl": str(ddl_date),
-                "days_overdue": days_overdue,
-                "notes": notes,
-            })
-
-    return pending
-
-
-def build_message_content(pending_tasks):
-    if not pending_tasks:
-        return None
-
-    person_tasks = {}
-    for task in pending_tasks:
-        for person in task["persons"]:
-            pid = person["id"]
-            if pid not in person_tasks:
-                person_tasks[pid] = {
-                    "name": person["name"],
-                    "id": pid,
-                    "tasks": [],
-import sys
-import json
-import requests
-from datetime import datetime, timezone, timedelta
-
-# ==================== Configuration ====================
-LARK_APP_ID = os.environ["LARK_APP_ID"]
-LARK_APP_SECRET = os.environ["LARK_APP_SECRET"]
-LARK_CHAT_ID = os.environ["LARK_CHAT_ID"]
-LARK_BASE_APP_TOKEN = os.environ["LARK_BASE_APP_TOKEN"]
-LARK_TABLE_ID = os.environ["LARK_TABLE_ID"]
-
-# Lark Suite API base URL
-BASE_URL = "https://open.larksuite.com/open-apis"
-
-# Beijing Time
-BJT = timezone(timedelta(hours=8))
-
-
-def get_tenant_access_token():
-    url = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
-    payload = {
-        "app_id": LARK_APP_ID,
-        "app_secret": LARK_APP_SECRET,
-    }
-    resp = requests.post(url, json=payload)
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("code") != 0:
-        raise Exception(f"Failed to get token: {data}")
-    return data["tenant_access_token"]
-
-
-def get_bitable_records(token):
-    url = f"{BASE_URL}/bitable/v1/apps/{LARK_BASE_APP_TOKEN}/tables/{LARK_TABLE_ID}/records"
-    headers = {"Authorization": f"Bearer {token}"}
-    all_records = []
-    page_token = None
-
-    while True:
-        params = {"page_size": 100}
-        if page_token:
-            params["page_token"] = page_token
-        resp = requests.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") != 0:
-            raise Exception(f"Failed to get records: {data}")
-        items = data.get("data", {}).get("items", [])
-        all_records.extend(items)
-        if not data["data"].get("has_more"):
-            break
-        page_token = data["data"].get("page_token")
-
     return all_records
 
 
@@ -211,25 +67,18 @@ def find_person_field(fields):
 def filter_pending_tasks(records):
     today = datetime.now(BJT).date()
     pending = []
-
-    # Print field keys from first record for debugging
     if records:
         first_fields = records[0].get("fields", {})
         print(f"DEBUG - Field keys in first record: {list(first_fields.keys())}")
-
     for record in records:
         fields = record.get("fields", {})
-
         # Check completion status
-        is_done = fields.get("完成情况", False)
-        if is_done:
+        if fields.get("完成情况", False):
             continue
-
         # Get DDL
         ddl_value = fields.get("DDL")
         if ddl_value is None:
             continue
-
         if isinstance(ddl_value, (int, float)):
             ddl_date = datetime.fromtimestamp(ddl_value / 1000, tz=BJT).date()
         else:
@@ -237,14 +86,10 @@ def filter_pending_tasks(records):
                 ddl_date = datetime.strptime(str(ddl_value).replace("/", "-"), "%Y-%m-%d").date()
             except ValueError:
                 continue
-
         if ddl_date <= today:
             task_name = fields.get("任务", "未命名任务")
-
             persons_raw = find_person_field(fields)
-
             notes = fields.get("备注", "")
-
             person_list = []
             if isinstance(persons_raw, list):
                 for p in persons_raw:
@@ -253,9 +98,7 @@ def filter_pending_tasks(records):
                             "id": p.get("id", ""),
                             "name": p.get("name", "未知"),
                         })
-
             days_overdue = (today - ddl_date).days
-
             pending.append({
                 "task": task_name,
                 "persons": person_list,
@@ -263,37 +106,25 @@ def filter_pending_tasks(records):
                 "days_overdue": days_overdue,
                 "notes": notes,
             })
-
     return pending
 
 
 def build_message_content(pending_tasks):
     if not pending_tasks:
         return None
-
     person_tasks = {}
     for task in pending_tasks:
         for person in task["persons"]:
             pid = person["id"]
             if pid not in person_tasks:
-                person_tasks[pid] = {
-                    "name": person["name"],
-                    "id": pid,
-                    "tasks": [],
-                }
+                person_tasks[pid] = {"name": person["name"], "id": pid, "tasks": []}
             person_tasks[pid]["tasks"].append(task)
-
         if not task["persons"]:
             if "__unassigned__" not in person_tasks:
-                person_tasks["__unassigned__"] = {
-                    "name": "未分配",
-                    "id": None,
-                    "tasks": [],
-                }
+                person_tasks["__unassigned__"] = {"name": "未分配", "id": None, "tasks": []}
             person_tasks["__unassigned__"]["tasks"].append(task)
 
     content = []
-
     for pid, info in person_tasks.items():
         person_line = []
         if info["id"]:
@@ -302,7 +133,6 @@ def build_message_content(pending_tasks):
         else:
             person_line.append({"tag": "text", "text": "⚠️ 以下任务尚未分配落实人："})
         content.append(person_line)
-
         for i, task in enumerate(info["tasks"], 1):
             task_line = []
             if task["days_overdue"] > 0:
@@ -315,12 +145,14 @@ def build_message_content(pending_tasks):
                     "tag": "text",
                     "text": f"  {i}. 🟡 【今日截止】{task['task']}\n     DDL: {task['ddl']}"
                 })
+            # Add @mentions for each person on this task
+            for person in task["persons"]:
+                task_line.append({"tag": "text", "text": " "})
+                task_line.append({"tag": "at", "user_id": person["id"]})
             if task.get("notes"):
                 task_line.append({"tag": "text", "text": f"\n     📝 备注: {task['notes']}"})
             content.append(task_line)
-
         content.append([{"tag": "text", "text": "\n"}])
-
     return content
 
 
@@ -331,7 +163,6 @@ def send_group_message(token, content):
         "Content-Type": "application/json",
     }
     params = {"receive_id_type": "chat_id"}
-
     msg_body = {
         "receive_id": LARK_CHAT_ID,
         "msg_type": "post",
@@ -342,14 +173,11 @@ def send_group_message(token, content):
             }
         }),
     }
-
     resp = requests.post(url, headers=headers, params=params, json=msg_body)
     resp.raise_for_status()
     data = resp.json()
-
     if data.get("code") != 0:
         raise Exception(f"Failed to send message: {data}")
-
     print(f"Message sent successfully! Message ID: {data['data']['message_id']}")
     return data
 
@@ -378,7 +206,6 @@ def main():
 
     print("Sending group message...")
     send_group_message(token, content)
-
     print("DDL Reminder completed!")
 
 
